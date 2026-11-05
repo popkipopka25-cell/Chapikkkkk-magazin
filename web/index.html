@@ -1,1 +1,44 @@
-
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#13121b">
+<title>ChapaShop — магазин Adopt Me за Telegram Stars</title>
+<meta name="description" content="ChapaShop: каталог товаров Adopt Me с оплатой в Telegram Stars.">
+<meta property="og:title" content="ChapaShop">
+<meta property="og:description" content="Каталог товаров Adopt Me с оплатой в Telegram Stars.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<!-- Версию ?v=… к ссылкам на /static добавляет сам сервер (main.py) -->
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-row">
+    <a class="logo" href="/" data-link><i>★</i><div>Chapa<span>Shop</span></div></a>
+    <div class="search-box"><input id="search" class="search" type="search" placeholder="Поиск" maxlength="64" autocomplete="off"></div>
+    <nav class="top-nav">
+      <a class="top-btn hide-sm" href="/about" data-link>О магазине</a>
+      <a class="top-btn top-cart" href="/cart" data-link aria-label="Корзина">🛒 Корзина<b id="cart-badge" class="badge" hidden>0</b></a>
+    </nav>
+  </div>
+</header>
+<main id="view" class="wrap"></main>
+<footer class="wrap foot">
+  <div>© ChapaShop. Не является официальным магазином Roblox или Adopt Me.</div>
+  <div><a href="/about" data-link>О магазине</a> · <a href="#" class="tg-link">Telegram</a></div>
+</footer>
+<nav class="tabbar">
+  <a href="/" data-link data-tab="home"><span>🏠</span>Каталог</a>
+  <a href="/cart" data-link data-tab="cart"><span>🛒</span>Корзина<b id="cart-badge2" class="badge" hidden>0</b></a>
+  <a href="/orders" data-link data-tab="orders" class="tg-only" hidden><span>📦</span>Заказы</a>
+  <a href="/profile" data-link data-tab="profile" class="tg-only" hidden><span>👤</span>Профиль</a>
+  <a href="/about" data-link data-tab="about" class="web-only"><span>ℹ️</span>Магазин</a>
+</nav>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
