@@ -13,10 +13,21 @@ def normalize(code: str | None) -> str:
     return (code or "").strip().upper()[:32]
 
 
+def effective_percent(promo: PromoCode) -> int | None:
+    """Процент скидки сейчас. Если задан рост: +1% за каждые growth_every использований, до max_percent."""
+    if not promo.percent:
+        return None
+    if promo.growth_every and promo.growth_every > 0:
+        cap = promo.max_percent or promo.percent
+        return max(promo.percent, min(cap, promo.percent + (promo.used_count or 0) // promo.growth_every))
+    return promo.percent
+
+
 def discount_for(promo: PromoCode, subtotal: int) -> int:
     """Скидка в Stars. Итог к оплате никогда не меньше 1 ⭐ (минимум Telegram)."""
-    if promo.percent:
-        d = subtotal * promo.percent // 100
+    pct = effective_percent(promo)
+    if pct:
+        d = subtotal * pct // 100
     else:
         d = promo.fixed_stars or 0
     return max(0, min(d, subtotal - 1))
