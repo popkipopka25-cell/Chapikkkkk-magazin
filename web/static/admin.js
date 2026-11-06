@@ -18,7 +18,7 @@ const STATUS = {awaiting_payment:"Ожидает оплаты", paid:"Оплач
 const NEXT = {awaiting_payment:["rejected"], paid:["processing","awaiting_delivery","delivered","rejected"], processing:["awaiting_delivery","delivered","rejected"], awaiting_delivery:["processing","delivered","rejected"]};
 const PAY = {pending:"Ожидает оплаты", paid:"Оплачен", refunded:"Возврат оформлен", failed:"Ошибка оплаты"};
 const ACTIONS = {login:"Вход", login_failed:"Неудачный вход", logout:"Выход", password_changed:"Смена пароля", order_status:"Статус заказа", order_server_link:"Ссылка на сервер", order_refund:"Возврат", product_create:"Новый товар", product_update:"Изменение товара", product_delete:"Удаление товара", settings_update:"Настройки", order_deliver:"Начата выдача", order_receipt_sent:"Отправлен чек", backup_create:"Резервная копия", backup_restore:"Восстановление из копии", promo_create:"Новый промокод", promo_update:"Изменение промокода", promo_delete:"Удаление промокода", user_block:"Блокировка покупателя", user_unblock:"Разблокировка покупателя", image_upload:"Загружено фото", demo_products_create:"Добавлены тестовые товары", demo_products_delete:"Удалены тестовые товары", promo_request_approve:"Заявка на промокод одобрена", promo_request_reject:"Заявка на промокод отклонена"};
-const SETTING_RU = {shop_name:"Название магазина", shop_description:"Описание", primary_color:"Основной цвет", maintenance_mode:"Режим обслуживания (0/1)", contact_info:"Контакты", order_rules:"Правила заказа", bot_username:"Username бота (без @)"};
+const SETTING_RU = {shop_name:"Название магазина", shop_description:"Описание", primary_color:"Основной цвет", maintenance_mode:"Режим обслуживания (0/1)", contact_info:"Контакты", order_rules:"Правила заказа", bot_username:"Username бота (без @)", vip_server_link:"Ссылка на VIP-сервер Roblox (покупатель увидит её после оплаты)"};
 const GLYPH = {pets:"🐾", eggs:"🥚", potions:"🧪", other:"🎁"};
 
 // ---------- Мелочи ----------
@@ -165,7 +165,10 @@ function orderRow(o) {
 async function orders() {
   const ok = fresh();
   let st = sessionStorage.getItem("st") || ""; sessionStorage.removeItem("st");
+  let vip = ""; try { vip = (await api("/settings")).settings.vip_server_link || ""; } catch {}
   view.innerHTML = `<div class="page-head"><h2>Заказы</h2></div>
+    <div class="card" style="margin-bottom:12px"><label class="fld" style="margin:0">🎮 Ссылка на VIP-сервер (покупатель увидит кнопку «Зайти на сервер» после оплаты)<input id="vip" maxlength="512" placeholder="https://www.roblox.com/share?code=..." value="${esc(vip)}" autocomplete="off" autocapitalize="off"></label>
+      <div class="actions"><button class="btn" id="vipsave">Сохранить ссылку</button></div></div>
     <div class="bar"><input id="oq" type="search" placeholder="Номер, Telegram ID или Roblox ник"></div>
     <div class="chips" id="ochips"></div><div id="olist" class="list"></div>`;
   const chips = () => {
@@ -180,6 +183,10 @@ async function orders() {
     } catch (e) { toast(e.message, true); }
   };
   let t; $("#oq").oninput = () => { clearTimeout(t); t = setTimeout(load, 300); };
+  bind($("#vipsave"), async () => {
+    await api("/settings", {method:"PUT", body:{values:{vip_server_link: $("#vip").value.trim()}}});
+    toast("Ссылка на VIP-сервер сохранена");
+  });
   chips(); await load();
 }
 
@@ -230,7 +237,7 @@ async function order(id) {
           ${hasPdf ? `<a class="btn out" id="a-pdf" href="/admin/api/orders/${o.id}/receipt.pdf?download=1" download>Сохранить PDF-чек</a>` : `<button class="btn dis" title="Чек появится после оплаты">Сохранить PDF-чек</button>`}
         </div>
         <div id="linkbox" class="linkbox hidden">
-          <label class="fld" style="margin:0">Ссылка на приватный сервер (https://…)<input id="lnk" maxlength="512" placeholder="https://www.roblox.com/share?code=..." value="${esc(o.server_link || "")}"></label>
+          <label class="fld" style="margin:0">Ссылка на приватный сервер (https://…)<input id="lnk" maxlength="512" placeholder="https://www.roblox.com/share?code=..." value="${esc(o.server_link || o.default_server_link || "")}"></label>
           <button class="btn" id="lgo">Отправить покупателю</button>
         </div>
         ${canGive || canReject ? "" : `<p class="note">Действия недоступны: ${o.status === "awaiting_payment" ? "заказ ещё не оплачен" : "заказ завершён"}.</p>`}
@@ -360,7 +367,7 @@ async function products() {
       <div class="pbody"><div class="pname">${esc(p.name)}</div>
         <div class="pprice">${stars(p.price_stars)}${p.old_price_stars ? `<s>${p.old_price_stars}</s>` : ""}</div>
         <div class="muted small">${esc(catName[p.category_id] || "Без категории")}</div>
-        <div class="ptags">${p.is_demo ? '<span class="badge">Демо</span>' : ""}${p.is_hidden ? '<span class="badge rejected">Скрыт</span>' : ""}${!p.is_available ? '<span class="badge awaiting_payment">Нет в наличии</span>' : ""}</div></div></div>`).join("")
+        <div class="ptags">${p.is_demo ? '<span class="badge">Демо</span>' : ""}${p.is_hidden ? '<span class="badge rejected">Скрыт</span>' : ""}${!p.in_stock ? '<span class="badge awaiting_payment">Нет в наличии</span>' : ""}${p.stock != null ? `<span class="badge">Осталось: ${p.stock}</span>` : ""}</div></div></div>`).join("")
       || `<div class="card empty" style="grid-column:1/-1">Товаров нет. Нажмите «+ Добавить товар».</div>`;
     $$("[data-id]", $("#plist")).forEach((el) => el.onclick = () => form(list.find((p) => p.id == el.dataset.id)));
   };
@@ -375,7 +382,7 @@ async function products() {
   // ----- форма добавления / редактирования -----
   function form(p) {
     const isNew = !p;
-    p = p || {name:"", description:"", image_url:"", category_id: cats[0] ? cats[0].id : null, base_price_stars:100, discount_percent:0, is_available:true, is_hidden:false, is_demo:false};
+    p = p || {name:"", description:"", image_url:"", category_id: cats[0] ? cats[0].id : null, base_price_stars:100, discount_percent:0, is_available:true, is_hidden:false, is_demo:false, stock:null};
     let blob = null, preview = p.image_url || "", removed = false;   // blob — выбранное, но ещё не загруженное фото
     const sheet = openModal(`<h3>${isNew ? "Новый товар" : "Редактирование"}</h3>
       <div class="fld">Фото товара</div>
@@ -391,6 +398,7 @@ async function products() {
         <label class="fld">Скидка, %<input id="fx" type="number" inputmode="numeric" min="0" max="90" value="${p.discount_percent || 0}"></label></div>
       <div class="dchips">${[0, 10, 20, 30, 50].map((d) => `<button class="chip" type="button" data-d="${d}">${d ? "−" + d + "%" : "Без скидки"}</button>`).join("")}</div>
       <div class="pricebox"><span>Покупатель заплатит</span><span id="fres"></span></div>
+      <label class="fld">Сколько штук в наличии (пусто — без ограничения)<input id="fst" type="number" inputmode="numeric" min="0" max="1000000" placeholder="Например, 3" value="${p.stock == null ? "" : p.stock}"></label>
       <label class="chk"><input type="checkbox" id="fa"${p.is_available ? " checked" : ""}> В наличии</label>
       <label class="chk"><input type="checkbox" id="fh"${p.is_hidden ? " checked" : ""}> Скрыть из магазина</label>
       <label class="chk"><input type="checkbox" id="fm"${p.is_demo ? " checked" : ""}> Пометка «Демо» (тестовый товар)</label>
@@ -438,6 +446,7 @@ async function products() {
         name, description: $("#fd", sheet).value, image_url: image,
         category_id: $("#fc", sheet).value ? +$("#fc", sheet).value : null,
         price_stars: price, discount_percent: Math.min(90, Math.max(0, parseInt($("#fx", sheet).value, 10) || 0)),
+        stock: $("#fst", sheet).value.trim() === "" ? null : Math.max(0, parseInt($("#fst", sheet).value, 10) || 0),
         is_available: $("#fa", sheet).checked, is_hidden: $("#fh", sheet).checked, is_demo: $("#fm", sheet).checked}});
       closeModal(); toast("Товар сохранён"); await products();
     });
