@@ -19,8 +19,16 @@ def order_created(db: Session, o: Order) -> bool:
     return send_message(o.telegram_id, get_text(db, "notify_order_created", **_fmt(o)), kb)
 
 
+def _vip_link(db: Session) -> str | None:
+    from app.models import Setting
+    s = db.get(Setting, "vip_server_link")
+    return ((s.value if s else "") or "").strip() or None
+
+
 def order_paid(db: Session, o: Order) -> bool:
-    return send_message(o.telegram_id, get_text(db, "notify_paid", **_fmt(o)), keyboards.order_buttons())
+    # После оплаты показываем кнопку «Зайти на сервер»: ссылка заказа или общая VIP-ссылка из настроек.
+    return send_message(o.telegram_id, get_text(db, "notify_paid", **_fmt(o)),
+                        keyboards.order_buttons(o.server_link or _vip_link(db)))
 
 
 def status_changed(db: Session, o: Order) -> bool:
