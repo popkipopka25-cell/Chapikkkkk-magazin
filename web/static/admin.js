@@ -17,14 +17,14 @@ let navSeq = 0;           // номер текущего перехода — ч
 const STATUS = {awaiting_payment:"Ожидает оплаты", paid:"Оплачен", processing:"В обработке", awaiting_delivery:"Ожидает выдачи", delivered:"Выдан", rejected:"Отклонён", refunded:"Возврат оформлен"};
 const NEXT = {awaiting_payment:["rejected"], paid:["processing","awaiting_delivery","delivered","rejected"], processing:["awaiting_delivery","delivered","rejected"], awaiting_delivery:["processing","delivered","rejected"]};
 const PAY = {pending:"Ожидает оплаты", paid:"Оплачен", refunded:"Возврат оформлен", failed:"Ошибка оплаты"};
-const ACTIONS = {login:"Вход", login_failed:"Неудачный вход", logout:"Выход", password_changed:"Смена пароля", order_status:"Статус заказа", order_server_link:"Ссылка на сервер", order_refund:"Возврат", product_create:"Новый товар", product_update:"Изменение товара", product_delete:"Удаление товара", settings_update:"Настройки", order_deliver:"Начата выдача", order_receipt_sent:"Отправлен чек", backup_create:"Резервная копия", backup_restore:"Восстановление из копии", promo_create:"Новый промокод", promo_update:"Изменение промокода", promo_delete:"Удаление промокода", user_block:"Блокировка покупателя", user_unblock:"Разблокировка покупателя", image_upload:"Загружено фото", demo_products_create:"Добавлены тестовые товары", demo_products_delete:"Удалены тестовые товары"};
+const ACTIONS = {login:"Вход", login_failed:"Неудачный вход", logout:"Выход", password_changed:"Смена пароля", order_status:"Статус заказа", order_server_link:"Ссылка на сервер", order_refund:"Возврат", product_create:"Новый товар", product_update:"Изменение товара", product_delete:"Удаление товара", settings_update:"Настройки", order_deliver:"Начата выдача", order_receipt_sent:"Отправлен чек", backup_create:"Резервная копия", backup_restore:"Восстановление из копии", promo_create:"Новый промокод", promo_update:"Изменение промокода", promo_delete:"Удаление промокода", user_block:"Блокировка покупателя", user_unblock:"Разблокировка покупателя", image_upload:"Загружено фото", demo_products_create:"Добавлены тестовые товары", demo_products_delete:"Удалены тестовые товары", promo_request_approve:"Заявка на промокод одобрена", promo_request_reject:"Заявка на промокод отклонена"};
 const SETTING_RU = {shop_name:"Название магазина", shop_description:"Описание", primary_color:"Основной цвет", maintenance_mode:"Режим обслуживания (0/1)", contact_info:"Контакты", order_rules:"Правила заказа", bot_username:"Username бота (без @)"};
 const GLYPH = {pets:"🐾", eggs:"🥚", potions:"🧪", other:"🎁"};
 
 // ---------- Мелочи ----------
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const dt = (s) => new Date(s).toLocaleString("ru-RU", {dateStyle:"short", timeStyle:"short"});
-const stars = (n) => `${n} ⭐`;
+const stars = (n) => (n === 0 ? "Бесплатно" : `${n} ⭐`);
 const badge = (s, big) => `<span class="badge ${esc(s)}${big ? " lg" : ""}">${esc(STATUS[s] || s)}</span>`;
 const fresh = () => { const my = navSeq; return () => my === navSeq; };
 
@@ -118,7 +118,7 @@ window.addEventListener("hashchange", () => { if (!$("#app").classList.contains(
 function route() {
   const [tab, id] = (location.hash.slice(1) || "dash").split("/");
   $$("#tabs a").forEach((a) => a.classList.toggle("on", a.dataset.tab === tab));
-  const pages = {dash, orders: () => id ? order(id) : orders(), products, promos, customers: () => id ? customer(id) : customers(), settings, audit, backup};
+  const pages = {dash, orders: () => id ? order(id) : orders(), products, promos, requests, customers: () => id ? customer(id) : customers(), settings, audit, backup};
   navSeq++;
   window.scrollTo(0, 0);
   const el = $("#tabs a.on"); if (el && el.scrollIntoView) el.scrollIntoView({inline:"center", block:"nearest"});
@@ -141,6 +141,7 @@ async function dash() {
       <div class="card stat"><small>Покупателей</small><b>${s.customers}</b></div>
       <a class="card stat" href="#customers"><small>Заблокировано</small><b>${s.blocked_users}</b></a>
       <a class="card stat" href="#promos"><small>Промокодов применено</small><b>${s.promo_uses}</b></a>
+      <a class="card stat" href="#requests"><small>Новых заявок на промокод</small><b>${s.promo_requests_pending || 0}</b></a>
     </div>
     <h3 style="margin:20px 0 10px">За период</h3>
     <div class="grid">${per("Сегодня", s.periods.today)}${per("7 дней", s.periods.week)}${per("30 дней", s.periods.month)}</div>
@@ -386,7 +387,7 @@ async function products() {
       <label class="fld">Название<input id="fn" maxlength="128" value="${esc(p.name)}" placeholder="Например, Неон-дракон"></label>
       <label class="fld">Описание (необязательно)<textarea id="fd" maxlength="2000" placeholder="Что входит в товар, особенности">${esc(p.description)}</textarea></label>
       <label class="fld">Категория<select id="fc"><option value="">Без категории</option>${cats.map((c) => `<option value="${c.id}"${c.id === p.category_id ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
-      <div class="two-in"><label class="fld">Цена без скидки, ⭐<input id="fp" type="number" inputmode="numeric" min="1" max="100000" value="${p.base_price_stars}"></label>
+      <div class="two-in"><label class="fld">Цена без скидки, ⭐ (0 — бесплатно)<input id="fp" type="number" inputmode="numeric" min="0" max="100000" value="${p.base_price_stars}"></label>
         <label class="fld">Скидка, %<input id="fx" type="number" inputmode="numeric" min="0" max="90" value="${p.discount_percent || 0}"></label></div>
       <div class="dchips">${[0, 10, 20, 30, 50].map((d) => `<button class="chip" type="button" data-d="${d}">${d ? "−" + d + "%" : "Без скидки"}</button>`).join("")}</div>
       <div class="pricebox"><span>Покупатель заплатит</span><span id="fres"></span></div>
@@ -425,7 +426,7 @@ async function products() {
     bind($("#fs", sheet), async () => {
       const name = $("#fn", sheet).value.trim(), price = parseInt($("#fp", sheet).value, 10);
       if (!name) throw new Error("Введите название товара");
-      if (!(price >= 1)) throw new Error("Цена должна быть от 1 ⭐");
+      if (!(price >= 0)) throw new Error("Цена должна быть от 0 ⭐ (0 — бесплатный товар)");
       let image = removed ? null : (p.image_url || null);
       const link = $("#furl", sheet).value.trim();
       if (link) image = link;
@@ -498,14 +499,16 @@ async function promos() {
     <label class="fld">Тип скидки<select id="pk"><option value="percent">Процент (1–90%)</option><option value="fixed">Фиксированная (⭐)</option></select></label>
     <label class="fld">Размер скидки<input id="pv" type="number" inputmode="numeric" min="1" placeholder="10"></label>
     <label class="fld">Сколько раз можно использовать (пусто — без лимита)<input id="pm" type="number" inputmode="numeric" min="1" placeholder="100"></label>
+    <label class="fld">Рост скидки: +1% за каждые N использований (необязательно, только для %)<input id="pg" type="number" inputmode="numeric" min="1" placeholder="10"></label>
+    <label class="fld">Потолок роста, % (необязательно)<input id="px" type="number" inputmode="numeric" min="1" max="90" placeholder="15"></label>
     <div class="actions"><button class="btn" id="padd">Создать</button></div></div>
     <div class="list">${list.map((p) => `<div class="card row"><div class="mid"><b class="mono" style="font-size:15px">${esc(p.code)}</b> ${p.is_active ? "" : '<span class="badge rejected">выключен</span>'}
       ${p.title ? `<div class="small">${esc(p.title)}</div>` : ""}
-      <div class="muted small">−${p.percent ? p.percent + "%" : p.fixed_stars + " ⭐"} · использован ${p.used_count}${p.max_uses ? " из " + p.max_uses : " раз"}</div></div>
+      <div class="muted small">−${p.percent ? (p.percent_now && p.percent_now !== p.percent ? p.percent_now + "% сейчас (старт " + p.percent + "%)" : p.percent + "%") + (p.growth_every ? ` · +1% за каждые ${p.growth_every}, до ${p.max_percent || p.percent}%` : "") : p.fixed_stars + " ⭐"} · использован ${p.used_count}${p.max_uses ? " из " + p.max_uses : " раз"}</div></div>
       <div class="actions" style="margin:0"><button class="btn ghost sm" data-t="${p.id}">${p.is_active ? "Выключить" : "Включить"}</button><button class="btn danger sm" data-d="${p.id}">Удалить</button></div></div>`).join("") || '<div class="card empty">Промокодов пока нет</div>'}</div></div>`;
   bind($("#padd"), async () => {
     const v = parseInt($("#pv").value, 10), m = parseInt($("#pm").value, 10), fixed = $("#pk").value === "fixed";
-    await api("/promos", {method:"POST", body:{code:$("#pc").value, title:$("#pt").value, percent: fixed ? null : v, fixed_stars: fixed ? v : null, max_uses: m || null}});
+    await api("/promos", {method:"POST", body:{code:$("#pc").value, title:$("#pt").value, percent: fixed ? null : v, fixed_stars: fixed ? v : null, max_uses: m || null, growth_every: fixed ? null : (parseInt($("#pg").value, 10) || null), max_percent: fixed ? null : (parseInt($("#px").value, 10) || null)}});
     toast("Промокод создан"); await promos();
   });
   $$("[data-t]", view).forEach((b) => bind(b, async () => {
@@ -515,6 +518,47 @@ async function promos() {
   $$("[data-d]", view).forEach((b) => bind(b, async () => {
     if (!(await ask({title: "Удалить промокод?", ok: "Удалить", danger: true}))) return;
     await api("/promos/" + b.dataset.d, {method:"DELETE"}); toast("Удалён"); await promos();
+  }));
+}
+
+
+// ================= ЗАЯВКИ НА ПРОМОКОД =================
+const PLAT = {tiktok: "TikTok", youtube: "YouTube"}, GAME = {murder_mystery: "Murder Mystery", adopt_me: "Adopt Me"}, LANG = {ru: "Русский", uk: "Українська", en: "English"};
+const REQ = {pending: ["Новая", "paid"], approved: ["Одобрена", "delivered"], rejected: ["Отклонена", "rejected"]};
+async function requests() {
+  const ok = fresh();
+  const status = ["pending", "approved", "rejected", "all"].includes(location.hash.split("/")[1]) ? location.hash.split("/")[1] : "pending";
+  const list = await api("/promo-requests?status=" + encodeURIComponent(status));
+  if (!ok()) return;
+  const tab = (k, t) => `<a class="btn ${status === k ? "" : "ghost"} sm" href="#requests/${k}">${t}</a>`;
+  const link = (u) => (/^https:\/\//.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>` : esc(u));
+  view.innerHTML = `<div class="page-head"><h2>Заявки на промокод</h2></div>
+    <div class="actions" style="margin:0 0 12px;flex-wrap:wrap">${tab("pending", "Новые")}${tab("approved", "Одобренные")}${tab("rejected", "Отклонённые")}${tab("all", "Все")}</div>
+    <div class="list">${list.map((r) => { const [lbl, cls] = REQ[r.status] || [r.status, ""]; return `<div class="card" data-r="${r.id}">
+      <div class="row" style="justify-content:space-between;gap:8px"><b class="mono" style="font-size:17px">${esc(r.code)}</b><span class="badge ${cls}">${lbl}</span></div>
+      <div class="small" style="margin-top:6px;display:grid;gap:3px">
+        <div><span class="muted">Платформа:</span> ${esc(PLAT[r.platform] || r.platform)} · ${link(r.channel_url)}</div>
+        <div><span class="muted">Режим:</span> ${esc(GAME[r.game] || r.game)} · <span class="muted">Язык:</span> ${esc(LANG[r.language] || r.language)}</div>
+        <div><span class="muted">Связь:</span> <a href="https://t.me/${esc(r.contact.replace("@", ""))}" target="_blank" rel="noopener noreferrer">${esc(r.contact)}</a> · <span class="muted">TG ID:</span> ${r.telegram_id}</div>
+        <div class="muted">${dt(r.created_at)}${r.decided_by ? ` · решил: ${esc(r.decided_by)}` : ""}</div>
+        ${r.status === "approved" ? `<div><b>${r.used_count ?? 0}</b> чел. ввели промокод · скидка сейчас ${r.percent_now || "—"}%</div>` : ""}
+        ${r.admin_comment ? `<div class="muted">Причина отказа: ${esc(r.admin_comment)}</div>` : ""}</div>
+      ${r.status === "pending" ? `<div class="two-in" style="margin-top:10px">
+        <label class="fld">Старт, %<input class="ap" type="number" inputmode="numeric" min="1" max="90" value="5"></label>
+        <label class="fld">+1% за каждые N чел.<input class="ag" type="number" inputmode="numeric" min="1" value="10"></label></div>
+        <label class="fld">Потолок, %<input class="ax" type="number" inputmode="numeric" min="1" max="90" value="15"></label>
+        <label class="fld">Причина отказа (необязательно)<input class="ac" maxlength="255" placeholder="Например, мало подписчиков"></label>
+        <div class="actions"><button class="btn sm" data-ok="${r.id}">Одобрить</button><button class="btn danger sm" data-no="${r.id}">Отклонить</button></div>` : ""}</div>`; }).join("") || '<div class="card empty">Заявок нет</div>'}</div>`;
+  $$("[data-ok]", view).forEach((b) => bind(b, async () => {
+    const c = b.closest("[data-r]"), v = (s) => parseInt($(s, c).value, 10);
+    await api(`/promo-requests/${b.dataset.ok}/approve`, {method: "POST", body: {percent: v(".ap"), growth_every: v(".ag"), max_percent: v(".ax")}});
+    toast("Одобрено — промокод создан, блогер получил сообщение"); await requests();
+  }));
+  $$("[data-no]", view).forEach((b) => bind(b, async () => {
+    const c = b.closest("[data-r]");
+    if (!(await ask({title: "Отклонить заявку?", ok: "Отклонить", danger: true}))) return;
+    await api(`/promo-requests/${b.dataset.no}/reject`, {method: "POST", body: {comment: $(".ac", c).value}});
+    toast("Отклонено"); await requests();
   }));
 }
 
