@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import get_settings
 from app.db import get_db
 from app import promo as promo_mod
+from app import stock as stock_mod
 from app.models import (ORDER_STATUS_RU, Admin, AuditLog, Category, Order, OrderItem,
                         OrderStatus, OrderStatusHistory, Payment, Product, ProductImage, PromoCode, PromoRequest, Setting, User)
 from app.security import (COOKIE, SESSION_TTL, check_session, csrf_for, hash_password,
@@ -225,6 +226,8 @@ def order_detail(oid: int, _: Admin = Depends(current_admin), db: Session = Depe
     u = db.get(User, o.user_id)
     d["customer"] = ({"id": u.id, "username": u.username, "first_name": u.first_name,
                       "is_blocked": bool(u.is_blocked)} if u else None)
+    vip = db.get(Setting, "vip_server_link")
+    d["default_server_link"] = ((vip.value if vip else "") or "").strip() or None     # общая VIP-ссылка из настроек
     d["payments"] = [{"charge_id": p.telegram_payment_charge_id, "amount": p.amount_stars, "status": p.status,
                       "at": p.created_at.isoformat()}
                      for p in db.scalars(select(Payment).where(Payment.order_id == o.id))]
@@ -258,6 +261,8 @@ def set_status(oid: int, body: StatusIn, admin: Admin = Depends(current_admin), 
     o.history.append(OrderStatusHistory(old_status=old, new_status=body.status,
                                         changed_by=admin.username, comment=body.comment))
     o.status = OrderStatus(body.status)
+    if body.status == "rejected":
+        stock_mod.give_back(db, o)          # отклонённый заказ возвращает товар на склад
     audit(db, admin.username, "order_status", "order", o.id, {"from": old, "to": body.status})
     db.commit()
     sent = False
@@ -305,8 +310,11 @@ def refund_order(oid: int, admin: Admin = Depends(current_admin), db: Session = 
     if o.payment_status.value != "paid":
         raise HTTPException(400, "Заказ не оплачен — возвращать нечего")
     from bot.payments import refund
+    was_delivered = o.status.value == "delivered"
     if not refund(db, o, actor=admin.username):
         raise HTTPException(400, "Платёж не найден")
+    if not was_delivered:
+        stock_mod.give_back(db, o)          # товар не выдан — возвращаем на склад
     audit(db, admin.username, "order_refund", "order", o.id, {"stars": o.total_stars})
     db.commit()
     from bot import notify
@@ -386,6 +394,7 @@ class ProductIn(BaseModel):
     is_available: bool = True
     is_hidden: bool = False
     is_demo: bool = False
+    stock: int | None = Field(None, ge=0, le=1000000)   # сколько штук в наличии; пусто — без ограничения
 
     @field_validator("image_url")
     @classmethod
@@ -413,7 +422,8 @@ def product_dict(p: Product) -> dict:
             "category_id": p.category_id, "price_stars": p.price_stars,
             "old_price_stars": p.old_price_stars, "discount_percent": p.discount_percent or 0,
             "base_price_stars": p.old_price_stars or p.price_stars,
-            "is_available": p.is_available, "is_hidden": p.is_hidden, "is_demo": p.is_demo}
+            "is_available": p.is_available, "is_hidden": p.is_hidden, "is_demo": p.is_demo,
+            "stock": p.stock, "in_stock": p.available_now}
 
 
 def _apply(p: Product, body: ProductIn) -> dict:
@@ -422,7 +432,8 @@ def _apply(p: Product, body: ProductIn) -> dict:
     new = {"name": body.name, "description": body.description, "image_url": body.image_url,
            "category_id": body.category_id, "price_stars": final, "old_price_stars": old,
            "discount_percent": body.discount_percent if old else 0,
-           "is_available": body.is_available, "is_hidden": body.is_hidden, "is_demo": body.is_demo}
+           "is_available": body.is_available, "is_hidden": body.is_hidden, "is_demo": body.is_demo,
+           "stock": body.stock}
     changes = {k: [getattr(p, k, None), v] for k, v in new.items() if getattr(p, k, None) != v}
     for k, v in new.items():
         setattr(p, k, v)
@@ -740,6 +751,10 @@ def put_settings(body: SettingsIn, admin: Admin = Depends(current_admin), db: Se
             raise HTTPException(400, f"Слишком длинное значение: {k}")
         if k == "maintenance_mode" and v not in ("0", "1"):
             raise HTTPException(400, "maintenance_mode: 0 или 1")
+        if k == "vip_server_link":
+            v = v.strip()
+            if v and not v.startswith("https://"):
+                raise HTTPException(400, "Ссылка на VIP-сервер должна начинаться с https://")
         if s.value != v:
             s.value = v
             changed.append(k)
