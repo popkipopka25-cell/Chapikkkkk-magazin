@@ -118,9 +118,16 @@ class Product(Base):
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Сколько штук в наличии. None — без ограничения. Уменьшается при заказе, возвращается при отклонении/возврате.
+    stock: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
     category: Mapped[Category | None] = relationship(back_populates="products")
+
+    @property
+    def available_now(self) -> bool:
+        """Можно ли купить прямо сейчас: включён «В наличии» и остаток не нулевой."""
+        return bool(self.is_available) and (self.stock is None or self.stock > 0)
 
 
 class ProductImage(Base):
