@@ -7,14 +7,14 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.db import get_db
 from app import promo as promo_mod
 from app.models import (ORDER_STATUS_RU, Admin, AuditLog, Category, Order, OrderItem,
-                        OrderStatus, OrderStatusHistory, Payment, Product, ProductImage, PromoCode, Setting, User)
+                        OrderStatus, OrderStatusHistory, Payment, Product, ProductImage, PromoCode, PromoRequest, Setting, User)
 from app.security import (COOKIE, SESSION_TTL, check_session, csrf_for, hash_password,
                           make_session, parse_session, verify_password)
 
@@ -162,6 +162,7 @@ def stats(_: Admin = Depends(current_admin), db: Session = Depends(get_db)):
         "paid_orders": paid_orders,
         "avg_check": round(revenue / paid_orders) if paid_orders else 0,
         "promo_uses": db.scalar(select(func.coalesce(func.sum(PromoCode.used_count), 0))) or 0,
+        "promo_requests_pending": db.scalar(select(func.count(PromoRequest.id)).where(PromoRequest.status == "pending")) or 0,
         "periods": {"today": period(1), "week": period(7), "month": period(30)},
         "daily": [{"date": k, **v} for k, v in days.items()],
         "top_products": [{"name": n, "qty": int(q), "stars": int(s)} for n, q, s in top],
@@ -198,7 +199,8 @@ def orders(_: Admin = Depends(current_admin), db: Session = Depends(get_db),
         q = q.strip()[:64]
         conds = [Order.roblox_username.ilike(f"%{q}%")]
         if q.lstrip("#").isdigit():
-            conds += [Order.id == int(q.lstrip("#")), Order.telegram_id == int(q.lstrip("#"))]
+            n = int(q.lstrip("#"))
+            conds += [Order.public_number == n, and_(Order.public_number.is_(None), Order.id == n), Order.telegram_id == n]
         stmt = stmt.where(or_(*conds))
     rows = db.scalars(stmt.order_by(Order.id.desc()).limit(min(max(limit, 1), 200)).offset(max(offset, 0))).all()
     out = []
@@ -379,7 +381,7 @@ class ProductIn(BaseModel):
     description: str = Field("", max_length=2000)
     image_url: str | None = Field(None, max_length=512)
     category_id: int | None = None
-    price_stars: int = Field(ge=1, le=100000)          # цена БЕЗ скидки; скидку считает сервер
+    price_stars: int = Field(ge=0, le=100000)          # цена БЕЗ скидки; 0 — бесплатный товар; скидку считает сервер
     discount_percent: int = Field(0, ge=0, le=90)
     is_available: bool = True
     is_hidden: bool = False
@@ -397,7 +399,9 @@ class ProductIn(BaseModel):
 
 
 def pricing(base: int, percent: int) -> tuple[int, int | None]:
-    """(итоговая цена, цена до скидки или None). Итог не бывает меньше 1 ⭐."""
+    """(итоговая цена, цена до скидки или None). Платный товар не бывает дешевле 1 ⭐; бесплатный остаётся 0."""
+    if base <= 0:
+        return 0, None
     if percent <= 0:
         return base, None
     final = max(1, round(base * (100 - percent) / 100))
@@ -630,6 +634,8 @@ class PromoIn(BaseModel):
     fixed_stars: int | None = Field(None, ge=1, le=100000)
     max_uses: int | None = Field(None, ge=1, le=1000000)
     is_active: bool = True
+    growth_every: int | None = Field(None, ge=1, le=100000)     # +1% за каждые N использований
+    max_percent: int | None = Field(None, ge=1, le=90)          # потолок роста
 
     @field_validator("code")
     @classmethod
@@ -649,7 +655,8 @@ class PromoIn(BaseModel):
 def promo_dict(p: PromoCode) -> dict:
     return {"id": p.id, "code": p.code, "title": p.title, "percent": p.percent, "fixed_stars": p.fixed_stars,
             "max_uses": p.max_uses, "used_count": p.used_count, "is_active": p.is_active,
-            "created_at": p.created_at.isoformat()}
+            "growth_every": p.growth_every, "max_percent": p.max_percent,
+            "percent_now": promo_mod.effective_percent(p), "created_at": p.created_at.isoformat()}
 
 
 def _check_promo_kind(body: PromoIn) -> None:
@@ -667,8 +674,13 @@ def create_promo(body: PromoIn, admin: Admin = Depends(current_admin), db: Sessi
     _check_promo_kind(body)
     if db.scalar(select(PromoCode.id).where(PromoCode.code == body.code)):
         raise HTTPException(409, "Такой промокод уже есть")
+    if body.growth_every and not body.percent:
+        raise HTTPException(422, "Рост скидки работает только для скидки в процентах")
+    if body.max_percent and body.percent and body.max_percent < body.percent:
+        raise HTTPException(422, "Максимум не может быть меньше стартовой скидки")
     p = PromoCode(code=body.code, title=body.title, percent=body.percent, fixed_stars=body.fixed_stars,
-                  max_uses=body.max_uses, is_active=body.is_active)
+                  max_uses=body.max_uses, is_active=body.is_active,
+                  growth_every=body.growth_every, max_percent=body.max_percent)
     db.add(p)
     db.flush()
     audit(db, admin.username, "promo_create", "promo", p.id, {"code": p.code})
@@ -686,6 +698,10 @@ def update_promo(pid: int, body: PromoIn, admin: Admin = Depends(current_admin),
         raise HTTPException(409, "Такой промокод уже есть")
     p.code, p.title, p.percent, p.fixed_stars = body.code, body.title, body.percent, body.fixed_stars
     p.max_uses, p.is_active = body.max_uses, body.is_active
+    if "growth_every" in body.model_fields_set:      # кнопка «Выключить» эти поля не шлёт — рост сохраняется
+        p.growth_every = body.growth_every
+    if "max_percent" in body.model_fields_set:
+        p.max_percent = body.max_percent
     audit(db, admin.username, "promo_update", "promo", p.id, {"code": p.code, "active": p.is_active})
     db.commit()
     return promo_dict(p)
@@ -793,3 +809,82 @@ def preflight(_: Admin = Depends(current_admin), db: Session = Depends(get_db)):
     """Этап 9: проверка готовности к запуску (без значений секретов)."""
     from app.preflight import run_checks, summary
     return summary(run_checks(db))
+
+
+# ---------- Заявки блогеров на промокод ----------
+class ApproveIn(BaseModel):
+    percent: int = Field(5, ge=1, le=90)           # стартовая скидка
+    growth_every: int = Field(10, ge=1, le=100000)  # +1% за каждые N использований
+    max_percent: int = Field(15, ge=1, le=90)       # потолок
+    max_uses: int | None = Field(None, ge=1, le=1000000)
+
+
+class RejectIn(BaseModel):
+    comment: str | None = Field(None, max_length=255)
+
+
+def request_dict(r: PromoRequest, db: Session) -> dict:
+    promo = db.get(PromoCode, r.promo_id) if r.promo_id else None
+    return {"id": r.id, "telegram_id": r.telegram_id, "platform": r.platform, "channel_url": r.channel_url,
+            "game": r.game, "language": r.language, "code": r.code, "contact": r.contact, "status": r.status,
+            "admin_comment": r.admin_comment, "created_at": r.created_at.isoformat(),
+            "decided_at": r.decided_at.isoformat() if r.decided_at else None, "decided_by": r.decided_by,
+            "used_count": promo.used_count if promo else None,
+            "percent_now": promo_mod.effective_percent(promo) if promo else None}
+
+
+def _tell_blogger(r: PromoRequest, text: str) -> None:
+    try:
+        from bot.telegram import send_message
+        send_message(r.telegram_id, text)
+    except Exception:
+        pass       # сообщение не доставилось — решение всё равно сохранено
+
+
+@router.get("/promo-requests")
+def list_promo_requests(status: str = "pending", _: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    q = select(PromoRequest).order_by(PromoRequest.id.desc()).limit(300)
+    if status in ("pending", "approved", "rejected"):
+        q = q.where(PromoRequest.status == status)
+    return [request_dict(r, db) for r in db.scalars(q)]
+
+
+@router.post("/promo-requests/{rid}/approve")
+def approve_promo_request(rid: int, body: ApproveIn, admin: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    r = db.get(PromoRequest, rid)
+    if r is None:
+        raise HTTPException(404, "Заявка не найдена")
+    if r.status != "pending":
+        raise HTTPException(409, "Заявка уже обработана")
+    if body.max_percent < body.percent:
+        raise HTTPException(422, "Максимум не может быть меньше стартовой скидки")
+    if db.scalar(select(PromoCode.id).where(PromoCode.code == r.code)):
+        raise HTTPException(409, "Такой промокод уже существует — отклоните заявку или удалите старый промокод")
+    p = PromoCode(code=r.code, title="Промокод блогера", percent=body.percent, growth_every=body.growth_every,
+                  max_percent=body.max_percent, max_uses=body.max_uses, is_active=True)
+    db.add(p)
+    db.flush()
+    r.status, r.promo_id, r.decided_by, r.decided_at = "approved", p.id, admin.username, datetime.now(timezone.utc)
+    audit(db, admin.username, "promo_request_approve", "promo_request", r.id, {"code": r.code})
+    db.commit()
+    _tell_blogger(r, f"✅ Ваша заявка одобрена!\nПромокод: <b>{r.code}</b>\n"
+                     f"Скидка для покупателей: {body.percent}%, растёт на 1% за каждые {body.growth_every} "
+                     f"человек, которые его ввели (до {body.max_percent}%).\n"
+                     "Напоминаем: магазин не предоставляет оплату блогерам, промокод даёт скидку на товары.")
+    return request_dict(r, db)
+
+
+@router.post("/promo-requests/{rid}/reject")
+def reject_promo_request(rid: int, body: RejectIn, admin: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    r = db.get(PromoRequest, rid)
+    if r is None:
+        raise HTTPException(404, "Заявка не найдена")
+    if r.status != "pending":
+        raise HTTPException(409, "Заявка уже обработана")
+    comment = (body.comment or "").strip() or None
+    r.status, r.admin_comment, r.decided_by, r.decided_at = "rejected", comment, admin.username, datetime.now(timezone.utc)
+    audit(db, admin.username, "promo_request_reject", "promo_request", r.id, {"code": r.code})
+    db.commit()
+    _tell_blogger(r, f"❌ Заявка на промокод <b>{r.code}</b> отклонена." + (f"\nПричина: {comment}" if comment else "")
+                     + "\nНовую заявку можно подать через 7 дней после предыдущей.")
+    return request_dict(r, db)
