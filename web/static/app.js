@@ -30,7 +30,7 @@ async function api(path, opts = {}) {
 }
 const fmtDate = (s) => new Date(s).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const PAY_RU = { pending: "Ожидает оплаты", paid: "Оплачен", refunded: "Возврат", failed: "Ошибка оплаты" };
-const stars = (n) => `${n} ⭐`;
+const stars = (n) => (n === 0 ? "Бесплатно" : `${n} ⭐`);
 // Цена: итоговая + зачёркнутая старая (если есть скидка).
 const priceNode = (p, cls = "price") => h("div", { class: cls }, stars(p.price_stars), p.old_price_stars ? h("s", { text: String(p.old_price_stars) }) : null);
 const salePill = (p) => p.old_price_stars ? h("span", { class: "pill sale", text: `−${p.discount_percent || Math.round(100 - p.price_stars * 100 / p.old_price_stars)}%` }) : null;
@@ -369,6 +369,109 @@ async function pageProfile() {
     h("a", { class: "btn btn-ghost btn-block", href: "/orders", "data-link": true }, "Мои заказы")));
 }
 
+// ---------- Заявка блогера на промокод (анкета из нескольких шагов) ----------
+const PLATFORMS = { tiktok: { name: "TikTok", example: "https://www.tiktok.com/@ваш_ник", hosts: ["tiktok.com", "www.tiktok.com", "m.tiktok.com", "vm.tiktok.com"] },
+                    youtube: { name: "YouTube", example: "https://www.youtube.com/@ваш_канал", hosts: ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"] } };
+const GAMES = { murder_mystery: "Murder Mystery", adopt_me: "Adopt Me" };
+const LANGS = { ru: "Русский", uk: "Українська", en: "English" };
+const REQ_STATUS = { pending: ["На рассмотрении", "wait"], approved: ["Одобрена", "ok"], rejected: ["Отклонена", "no"] };
+
+async function pagePromo() {
+  document.title = "Промокод для блогеров — ChapaShop";
+  if (!TG) return needTG();
+  view.replaceChildren(h("h2", { class: "title", text: "Свой промокод" }), h("div", { class: "skel" }));
+  let st;
+  try { st = await api("/api/promo-requests/mine"); } catch (x) { return view.replaceChildren(h("div", { class: "empty", text: x.message })); }
+  const w = { step: 1, platform: "", url: "", game: "", lang: "", code: "", contact: (TG.initDataUnsafe && TG.initDataUnsafe.user && TG.initDataUnsafe.user.username) ? "@" + TG.initDataUnsafe.user.username : "" };
+  const box = h("div", { class: "wz" });
+  const fmtDay = (n) => (n % 10 === 1 && n % 100 !== 11 ? "день" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "дня" : "дней");
+
+  function statusCard() {
+    const l = st.last; if (!l) return "";
+    const [label, cls] = REQ_STATUS[l.status] || [l.status, "wait"];
+    const kids = [h("div", { class: "wz-row" }, h("b", { class: "mono", text: l.code }), h("span", { class: "status " + cls, text: label }))];
+    if (l.status === "approved") {
+      kids.push(h("div", { class: "wz-count" }, h("b", { text: String(l.used_count ?? 0) }), h("span", { text: " чел. ввели ваш промокод" })));
+      if (l.percent_now) kids.push(h("p", { class: "hint", text: `Скидка сейчас: ${l.percent_now}%. Чем больше людей вводит промокод, тем больше скидка${l.growth_every ? ` (+1% за каждые ${l.growth_every} чел., до ${l.percent_max}%)` : ""}.` }));
+    }
+    if (l.status === "pending") kids.push(h("p", { class: "hint", text: "Мы рассмотрим заявку и напишем вам в Telegram." }));
+    if (l.status === "rejected" && l.admin_comment) kids.push(h("p", { class: "hint", text: "Причина: " + l.admin_comment }));
+    if (!st.can_apply) kids.push(h("p", { class: "hint", text: `Новую заявку можно отправить через ${st.days_left} ${fmtDay(st.days_left)} (раз в 7 дней).` }));
+    return h("div", { class: "wz-card" }, h("h3", { text: "Ваша заявка" }), ...kids);
+  }
+  const nav = (back, next, nextLabel = "Дальше", ok = true) => h("div", { class: "wz-nav" },
+    back ? h("button", { class: "btn", type: "button", onclick: back }, "Назад") : "",
+    h("button", { class: "btn btn-primary", type: "button", disabled: ok ? null : true, onclick: next }, nextLabel));
+  const choice = (map, cur, pick) => h("div", { class: "wz-choice" }, Object.entries(map).map(([k, v]) =>
+    h("button", { class: "wz-opt" + (cur === k ? " on" : ""), type: "button", onclick: () => pick(k) }, typeof v === "string" ? v : v.name)));
+  const head = (n, t) => [h("div", { class: "wz-step", text: `Шаг ${n} из 5` }), h("h3", { text: t })];
+  const urlOk = () => {
+    try { const u = new URL(/^https?:\/\//i.test(w.url.trim()) ? w.url.trim() : "https://" + w.url.trim()); return !!w.platform && PLATFORMS[w.platform].hosts.includes(u.hostname.toLowerCase()) && u.pathname.length > 1; } catch { return false; }
+  };
+
+  function draw() {
+    let body;
+    if (w.step === 1) {
+      const url = h("input", { value: w.url, placeholder: w.platform ? PLATFORMS[w.platform].example : "Сначала выберите, где снимаете", maxlength: 300, inputmode: "url", autocomplete: "off", autocapitalize: "off" });
+      const ex = h("div", { class: "hint", text: w.platform ? "Пример ссылки: " + PLATFORMS[w.platform].example : "Выберите платформу — покажем, как выглядит ссылка." });
+      const next = h("button", { class: "btn btn-primary", type: "button", onclick: () => { w.step = 2; draw(); } }, "Дальше");
+      const sync = () => { w.url = url.value; next.disabled = !urlOk(); };
+      url.addEventListener("input", sync); next.disabled = !urlOk();
+      body = [...head(1, "Где вы снимаете?"), choice(PLATFORMS, w.platform, (k) => { w.platform = k; draw(); }),
+        h("label", { class: "field" }, "Ссылка на ваш канал", url), ex, h("div", { class: "wz-nav" }, next)];
+    } else if (w.step === 2) {
+      body = [...head(2, "По какому режиму в Roblox снимаете?"), choice(GAMES, w.game, (k) => { w.game = k; draw(); }), nav(() => { w.step = 1; draw(); }, () => { w.step = 3; draw(); }, "Дальше", !!w.game)];
+    } else if (w.step === 3) {
+      body = [...head(3, "На каком языке снимаете?"), choice(LANGS, w.lang, (k) => { w.lang = k; draw(); }), nav(() => { w.step = 2; draw(); }, () => { w.step = 4; draw(); }, "Дальше", !!w.lang)];
+    } else if (w.step === 4) {
+      body = [...head(4, "Важно перед продолжением"),
+        h("div", { class: "wz-card" },
+          h("p", {}, "Магазин ", h("b", { text: "ChapaShop" }), " не предоставляет никакой оплаты блогерам."),
+          h("p", { text: "Промокод предоставляет скидку на товары, но не предоставляет оплату блогерам." }),
+          h("p", { text: "Чем больше людей вводит ваш промокод, тем больше скидка. Заявку можно отправлять раз в 7 дней.", class: "hint" })),
+        nav(() => { w.step = 3; draw(); }, () => { w.step = 5; draw(); }, "Продолжить анкету")];
+    } else if (w.step === 5) {
+      const code = h("input", { value: w.code, placeholder: "CHAPIK", maxlength: 20, autocapitalize: "characters", autocomplete: "off" });
+      const contact = h("input", { value: w.contact, placeholder: "@username", maxlength: 33, autocapitalize: "off", autocomplete: "off" });
+      const err = h("div", { class: "err" });
+      const next = h("button", { class: "btn btn-primary", type: "button", onclick: () => { w.step = 6; draw(); } }, "Дальше");
+      const sync = () => {
+        w.code = code.value.trim().toUpperCase(); w.contact = contact.value.trim();
+        const codeOk = /^[A-Z0-9]{3,20}$/.test(w.code), cOk = /^@?[A-Za-z0-9_]{5,32}$/.test(w.contact);
+        err.textContent = w.code && !codeOk ? "Название: только английские буквы и цифры, 3–20 символов" : (w.contact && !cOk ? "Юзернейм: от 5 символов, латиница, цифры и _" : "");
+        next.disabled = !(codeOk && cOk);
+      };
+      code.addEventListener("input", () => { code.value = code.value.toUpperCase(); sync(); }); contact.addEventListener("input", sync); sync();
+      body = [...head(5, "Название промокода и связь"),
+        h("label", { class: "field" }, "Название промокода (английские буквы и цифры)", code), h("div", { class: "hint", text: "Например: CHAPIK или CHAPIK2026. Иначе заявка не будет засчитана." }),
+        h("label", { class: "field" }, "Ваш юзернейм в Telegram для связи", contact), err,
+        h("div", { class: "wz-nav" }, h("button", { class: "btn", type: "button", onclick: () => { w.step = 4; draw(); } }, "Назад"), next)];
+    } else if (w.step === 6) {
+      const row = (k, v) => h("div", { class: "wz-sum" }, h("span", { text: k }), h("b", { text: v }));
+      const msg = h("div", { class: "err" });
+      const send = h("button", { class: "btn btn-primary", type: "button", onclick: async () => {
+        send.disabled = true; msg.textContent = "";
+        try {
+          st = await api("/api/promo-requests", { method: "POST", body: JSON.stringify({ platform: w.platform, channel_url: w.url.trim(), game: w.game, language: w.lang, code: w.code, contact: w.contact }) });
+          w.step = 7; draw();
+        } catch (x) { msg.textContent = x.message; send.disabled = false; }
+      } }, "Отправить заявку");
+      body = [h("h3", { text: "Проверьте заявку" }),
+        h("div", { class: "wz-card" }, row("Платформа", PLATFORMS[w.platform].name), row("Канал", w.url.trim()), row("Режим", GAMES[w.game]), row("Язык", LANGS[w.lang]), row("Промокод", w.code), row("Связь", w.contact.startsWith("@") ? w.contact : "@" + w.contact)),
+        h("p", { class: "hint", text: "Промокод даёт покупателям скидку на товары, но не оплату блогеру." }), msg,
+        h("div", { class: "wz-nav" }, h("button", { class: "btn", type: "button", onclick: () => { w.step = 5; draw(); } }, "Назад"), send)];
+    } else {
+      body = [h("div", { class: "wz-done" }, h("div", { class: "wz-ok", text: "✓" }), h("h3", { text: "Заявка отправлена" }),
+        h("p", { text: "Мы рассмотрим её и напишем вам в Telegram. Следующую заявку можно отправить через 7 дней." }),
+        h("a", { class: "btn btn-primary", href: "/", "data-link": true }, "В магазин"))];
+    }
+    box.replaceChildren(...body);
+  }
+  const intro = [h("h2", { class: "title", text: "Свой промокод" }), statusCard()];
+  if (st.can_apply) { draw(); view.replaceChildren(...intro, box); }
+  else view.replaceChildren(...intro, h("a", { class: "btn", href: "/", "data-link": true }, "В магазин"));
+}
+
 // ---------- Маршрутизация ----------
 function route() {
   updateBadge();
@@ -380,6 +483,7 @@ function route() {
   if (m) return pageProduct(+m[1]);
   if (path === "/cart") return pageCart();
   if (path === "/about") return pageAbout();
+  if (path === "/promo") return pagePromo();
   const om = path.match(/^\/orders\/(\d+)$/);
   if (om) return pageOrder(+om[1]);
   if (path === "/orders") return pageOrders();
