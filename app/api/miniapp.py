@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app import promo as promo_mod
+from app import stock as stock_mod
 from app.models import (ORDER_STATUS_RU, Order, OrderItem, OrderStatus, OrderStatusHistory, Payment, PaymentStatus,
                         Product, PromoCode, Setting, User)
 from app.tg_auth import InitDataError, verify_init_data
@@ -65,13 +66,24 @@ def current_user(db: Session = Depends(get_db),
     return user
 
 
-def _order_out(o: Order) -> dict:
+def _vip_link(db: Session) -> str | None:
+    """Общая ссылка на VIP-сервер из настроек панели (пусто — не задана)."""
+    s = db.get(Setting, "vip_server_link")
+    return ((s.value if s else "") or "").strip() or None
+
+
+# Покупатель видит ссылку на сервер только после оплаты.
+LINK_STATUSES = ("paid", "processing", "awaiting_delivery", "delivered")
+
+
+def _order_out(o: Order, vip: str | None = None) -> dict:
+    link = o.server_link or (vip if o.status.value in LINK_STATUSES else None)
     return {
         "id": o.id, "number": o.number, "created_at": o.created_at.isoformat(),
         "roblox_username": o.roblox_username, "total_stars": o.total_stars,
         "promo_code": o.promo_code, "discount_stars": o.discount_stars or 0,
         "payment_status": o.payment_status.value, "status": o.status.value,
-        "status_ru": ORDER_STATUS_RU[o.status.value], "server_link": o.server_link,
+        "status_ru": ORDER_STATUS_RU[o.status.value], "server_link": link,
         "items": [{"name": i.product_name, "price_stars": i.price_stars, "quantity": i.quantity,
                    "subtotal": i.price_stars * i.quantity} for i in o.items],
         "history": [{"status": h.new_status, "status_ru": ORDER_STATUS_RU.get(h.new_status, h.new_status),
@@ -106,7 +118,8 @@ def set_roblox(body: RobloxIn, user: User = Depends(current_user), db: Session =
 @router.get("/orders")
 def my_orders(user: User = Depends(current_user), db: Session = Depends(get_db)):
     orders = db.scalars(select(Order).where(Order.user_id == user.id).order_by(Order.id.desc()).limit(100)).all()
-    return [_order_out(o) for o in orders]
+    vip = _vip_link(db)
+    return [_order_out(o, vip) for o in orders]
 
 
 @router.get("/orders/{order_id}")
@@ -114,7 +127,7 @@ def my_order(order_id: int, user: User = Depends(current_user), db: Session = De
     o = db.get(Order, order_id)
     if o is None or o.user_id != user.id:   # чужие заказы не видны
         raise HTTPException(404, "Заказ не найден")
-    return _order_out(o)
+    return _order_out(o, _vip_link(db))
 
 
 class LineIn(BaseModel):
@@ -147,7 +160,7 @@ def create_order(body: OrderIn, user: User = Depends(current_user), db: Session 
     items, total = [], 0
     for pid, qty in merged.items():
         p = products.get(pid)
-        if p is None or p.is_hidden or not p.is_available:
+        if p is None or p.is_hidden or not p.available_now:
             raise HTTPException(409, f"Товар {pid} недоступен — обновите корзину")
         items.append(OrderItem(product_id=p.id, product_name=p.name, price_stars=p.price_stars, quantity=qty))
         total += p.price_stars * qty
@@ -169,6 +182,15 @@ def create_order(body: OrderIn, user: User = Depends(current_user), db: Session 
         if got.rowcount != 1:
             db.rollback()
             raise HTTPException(409, "Лимит использований промокода исчерпан")
+    # Остаток на складе: забираем штуки атомарно, чтобы два покупателя не купили последний товар одновременно.
+    for pid, qty in merged.items():
+        p = products[pid]
+        name = p.name
+        if not stock_mod.take(db, p, qty):
+            db.rollback()
+            left = db.scalar(select(Product.stock).where(Product.id == pid)) or 0
+            raise HTTPException(409, f"Товара «{name}» осталось {left} шт. — уменьшите количество" if left
+                                else f"Товар «{name}» закончился")
     free = total - discount <= 0           # бесплатный заказ: платить нечего, сразу «Оплачен» и ждёт выдачи
     first = OrderStatus.paid if free else OrderStatus.awaiting_payment
     o = Order(user_id=user.id, telegram_id=user.telegram_id, roblox_username=nick, total_stars=total - discount,
@@ -182,10 +204,10 @@ def create_order(body: OrderIn, user: User = Depends(current_user), db: Session 
     db.refresh(o)
     from bot import notify
     try:
-        notify.order_created(db, o)
+        (notify.order_paid if free else notify.order_created)(db, o)    # бесплатный заказ: кнопки «Оплатить» нет
     except Exception:
         pass
-    return _order_out(o)
+    return _order_out(o, _vip_link(db))
 
 
 @router.post("/orders/{order_id}/invoice")
