@@ -1,7 +1,9 @@
 """Все таблицы ChapaShop. Изменения схемы — только через миграции Alembic."""
 import enum
+import random
 from datetime import datetime, timezone
 
+from sqlalchemy import event, text
 from sqlalchemy import (BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, LargeBinary,
                         JSON, String, Text, UniqueConstraint, CheckConstraint)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -60,7 +62,29 @@ class PromoCode(Base):
     max_uses: Mapped[int | None] = mapped_column(Integer)       # None — без лимита
     used_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    # «Чем больше людей вводит промокод, тем больше скидка»: каждые growth_every использований +1%, но не больше max_percent.
+    growth_every: Mapped[int | None] = mapped_column(Integer)
+    max_percent: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class PromoRequest(Base):
+    """Заявка блогера на личный промокод (анкета в Mini App)."""
+    __tablename__ = "promo_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    platform: Mapped[str] = mapped_column(String(16))               # tiktok | youtube
+    channel_url: Mapped[str] = mapped_column(String(300))
+    game: Mapped[str] = mapped_column(String(32))                   # murder_mystery | adopt_me
+    language: Mapped[str] = mapped_column(String(8))                # ru | uk | en
+    code: Mapped[str] = mapped_column(String(20), index=True)       # только A-Z и 0-9
+    contact: Mapped[str] = mapped_column(String(40))                # @юзернейм для связи
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending", index=True)
+    admin_comment: Mapped[str | None] = mapped_column(String(255))
+    promo_id: Mapped[int | None] = mapped_column(ForeignKey("promo_codes.id", ondelete="SET NULL"))
+    decided_by: Mapped[str | None] = mapped_column(String(64))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class Admin(Base):
@@ -82,13 +106,13 @@ class Category(Base):
 
 class Product(Base):
     __tablename__ = "products"
-    __table_args__ = (CheckConstraint("price_stars >= 1", name="ck_price_positive"),)
+    __table_args__ = (CheckConstraint("price_stars >= 0", name="ck_price_nonneg"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     description: Mapped[str] = mapped_column(Text, default="")
     image_url: Mapped[str | None] = mapped_column(String(512))
     category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id", ondelete="SET NULL"))
-    price_stars: Mapped[int] = mapped_column(Integer)           # ИТОГОВАЯ цена (уже со скидкой)
+    price_stars: Mapped[int] = mapped_column(Integer)           # ИТОГОВАЯ цена (уже со скидкой); 0 — бесплатный товар
     old_price_stars: Mapped[int | None] = mapped_column(Integer)  # цена до скидки (зачёркнутая), если скидка есть
     discount_percent: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -122,6 +146,8 @@ class Order(Base):
     __tablename__ = "orders"
     # id — автоинкремент БД, поэтому номер заказа уникален даже при одновременном создании.
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Красивый номер заказа (56, 355, 4821…): случайный и уникальный. У старых заказов пусто — для них номер из id.
+    public_number: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     roblox_username: Mapped[str] = mapped_column(String(32), index=True)
@@ -137,14 +163,7 @@ class Order(Base):
 
     @property
     def number(self) -> str:
-        # Генерируем красивый уникальный номер на основе ID: буква + 4 цифры
-        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
-        char = alphabet[self.id % 24]
-        num = (self.id * 7391) % 10000
-        return f"{char}-{num:04d}"
-    @property
-    def number(self) -> str:
-        return f"{self.id:05d}"
+        return str(self.public_number) if self.public_number else f"{self.id:05d}"
 
 
 class OrderItem(Base):
@@ -196,3 +215,22 @@ class AuditLog(Base):
     entity_id: Mapped[str | None] = mapped_column(String(64))
     details: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+def pick_order_number(conn) -> int:
+    """Случайный свободный номер. Пока заказов мало — 2–3 цифры (56, 355), потом 4, 5 цифр и т.д."""
+    count = conn.execute(text("SELECT COUNT(*) FROM orders")).scalar() or 0
+    lo, hi = 10, 999
+    while count > (hi - lo) * 0.45:
+        lo, hi = hi + 1, hi * 10 + 9
+    for _ in range(80):
+        n = random.randint(lo, hi)
+        if conn.execute(text("SELECT 1 FROM orders WHERE public_number = :n"), {"n": n}).first() is None:
+            return n
+    return random.randint(hi + 1, hi * 10 + 9)      # почти невозможно: расширяем диапазон
+
+
+@event.listens_for(Order, "before_insert")
+def _assign_order_number(mapper, connection, target):
+    if not target.public_number:
+        target.public_number = pick_order_number(connection)
