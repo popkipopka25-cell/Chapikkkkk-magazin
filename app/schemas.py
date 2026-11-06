@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategoryOut(BaseModel):
@@ -18,7 +18,8 @@ class ProductOut(BaseModel):
     price_stars: int
     old_price_stars: int | None = None
     discount_percent: int = 0
-    is_available: bool
+    is_available: bool = Field(validation_alias="available_now")   # с учётом остатка на складе
+    stock: int | None = None                                       # None — без ограничения
     is_demo: bool
 
 
@@ -42,6 +43,7 @@ class CartLineOut(BaseModel):
     old_price_stars: int | None = None
     category_id: int | None = None
     image_url: str | None = None
+    stock: int | None = None
 
 
 class CartQuoteOut(BaseModel):
