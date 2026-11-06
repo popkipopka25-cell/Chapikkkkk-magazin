@@ -1,7 +1,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -42,7 +42,8 @@ def products(
     if category:
         stmt = stmt.join(Category).where(Category.slug == category)
     if available is not None:
-        stmt = stmt.where(Product.is_available.is_(available))
+        in_stock = and_(Product.is_available.is_(True), or_(Product.stock.is_(None), Product.stock > 0))
+        stmt = stmt.where(in_stock if available else not_(in_stock))
     order = {"new": Product.id.desc(), "price_asc": Product.price_stars.asc(),
              "price_desc": Product.price_stars.desc(), "name": Product.name.asc()}[sort]
     return db.scalars(stmt.order_by(order)).all()
@@ -93,11 +94,13 @@ def cart_quote(body: CartQuoteIn, db: Session = Depends(get_db)):
         if p is None or p.is_hidden:
             removed.append(pid)
             continue
-        sub = p.price_stars * qty if p.is_available else 0
+        if p.stock is not None and p.stock > 0:
+            qty = min(qty, p.stock)                 # больше, чем есть на складе, в заказ не попадёт
+        sub = p.price_stars * qty if p.available_now else 0
         out.append(CartLineOut(product_id=p.id, name=p.name, price_stars=p.price_stars, old_price_stars=p.old_price_stars,
-                               quantity=qty, subtotal=sub, available=p.is_available,
-                               category_id=p.category_id, image_url=p.image_url))
-        if p.is_available:
+                               quantity=qty, subtotal=sub, available=p.available_now,
+                               category_id=p.category_id, image_url=p.image_url, stock=p.stock))
+        if p.available_now:
             total += sub
             count += qty
     discount, applied, promo_title, promo_error = 0, None, None, None
