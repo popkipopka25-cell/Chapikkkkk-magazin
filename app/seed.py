@@ -22,6 +22,7 @@ SETTINGS = {
     "contact_info": "По любому вопросу о шопе пишите в Telegram: @ChapikSupport",
     "order_rules": "После оплаты укажите верный Roblox username. Выдача проходит на приватном сервере.",
     "bot_username": "",
+    "vip_server_link": "",     # ссылка на VIP-сервер Roblox: видна покупателю после оплаты (кнопка «Зайти на сервер»)
 }
 
 
