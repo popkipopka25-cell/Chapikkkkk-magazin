@@ -330,3 +330,21 @@ body{
 }
 
 .promo-ok{color:var(--ok);font-size:13px;font-weight:700}
+
+/* ===== Заявка на промокод ===== */
+.wz{display:grid;gap:14px;margin-top:6px}
+.wz h3{font-size:20px;margin:0;letter-spacing:-.02em}
+.wz-step{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.wz-card{background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:var(--r-lg);padding:16px;display:grid;gap:10px;margin:0 0 14px}
+.wz-card h3{font-size:17px}.wz-card p{margin:0;line-height:1.5}
+.wz-row{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;letter-spacing:.04em}
+.wz-count{display:flex;align-items:baseline;gap:8px}.wz-count b{font-size:34px;color:var(--gold);letter-spacing:-.03em}
+.wz-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.wz-opt{padding:16px 12px;border-radius:var(--r-md);background:var(--card);color:var(--text);border:2px solid var(--line);font:inherit;font-weight:700;font-size:15px;cursor:pointer;transition:.15s}
+.wz-opt.on{border-color:#8f7bff;background:linear-gradient(135deg,rgba(109,77,255,.35),rgba(139,63,240,.25));box-shadow:0 8px 22px -10px rgba(123,47,247,.9)}
+.wz-nav{display:flex;gap:10px;justify-content:flex-end;margin-top:4px}.wz-nav .btn{flex:1;max-width:200px}
+.wz-nav .btn[disabled]{opacity:.45;pointer-events:none}
+.wz-sum{display:flex;justify-content:space-between;gap:14px;font-size:14px;word-break:break-all}.wz-sum span{color:var(--muted);flex:none}.wz-sum b{text-align:right}
+.wz-done{text-align:center;display:grid;gap:12px;justify-items:center;padding:24px 0}
+.wz-ok{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font-size:32px;font-weight:800;background:rgba(52,211,153,.18);color:var(--ok)}
