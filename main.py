@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin, catalog, health, miniapp, roblox, telegram
+from app.api import admin, catalog, health, miniapp, promo_requests, roblox, telegram
 from app.db import SessionLocal
 from app.seed import seed
 
@@ -47,6 +47,7 @@ app.include_router(catalog.media_router)     # /media/<id> — фото това
 app.include_router(telegram.router)
 app.include_router(miniapp.router)
 app.include_router(miniapp.public_router)    # /receipt/... — PDF-чек по временной ссылке
+app.include_router(promo_requests.router)
 app.include_router(roblox.router)
 app.include_router(admin.router)
 
@@ -154,6 +155,7 @@ def index():
 @app.get("/cart", include_in_schema=False)
 @app.get("/about", include_in_schema=False)
 @app.get("/app", include_in_schema=False)
+@app.get("/promo", include_in_schema=False)
 @app.get("/orders", include_in_schema=False)
 @app.get("/orders/{order_id}", include_in_schema=False)
 @app.get("/profile", include_in_schema=False)
