@@ -85,14 +85,24 @@ function updateBadge() {
 const CAT_STYLE = {
   pets: ["🐾", "#b57bff", "#7b2ff7"], eggs: ["🥚", "#ffb86b", "#ff7a59"],
   potions: ["🧪", "#6ad6ff", "#4d7cff"], other: ["🎁", "#ff8fc7", "#c14bff"],
+  adopt_me: ["🐉", "#6d5cff", "#c060ff"], mm2: ["🏹", "#24c4a0", "#0f7a68"], accounts: ["👤", "#6ad6ff", "#4d7cff"],
 };
 const catSlug = (id) => (state.cats.find((c) => c.id === id) || {}).slug;
+const catOf = (id) => state.cats.find((c) => c.id === id) || {};
+const isUrl = (s) => typeof s === "string" && /^(\/|https:\/\/)/.test(s);
+// Иконка категории: картинка (из админки) или эмодзи. Тексты выводятся через textContent.
+function iconNode(icon, fallback, style) {
+  if (isUrl(icon)) return h("img", { src: icon, alt: "", loading: "lazy", style: style || "width:24px;height:24px;object-fit:contain" });
+  return document.createTextNode(icon || fallback || "★");
+}
 function productImage(p, cls = "img") {
   const box = h("div", { class: cls });
   if (p.image_url) { box.append(h("img", { src: p.image_url, alt: p.name, loading: "lazy" })); return box; }
-  const [glyph, c1, c2] = CAT_STYLE[catSlug(p.category_id)] || ["★", "#b57bff", "#7b2ff7"];
+  const cat = catOf(p.category_id);
+  const [glyph, c1, c2] = CAT_STYLE[cat.slug] || ["★", "#b57bff", "#7b2ff7"];
   box.classList.add("art"); box.style.setProperty("--c1", c1); box.style.setProperty("--c2", c2);
-  box.append(h("span", { class: "glyph", "aria-hidden": "true" }, glyph));
+  if (isUrl(cat.icon)) box.append(h("img", { src: cat.icon, alt: "", "aria-hidden": "true", style: "position:relative;z-index:1;width:58%;height:58%;object-fit:contain;filter:drop-shadow(0 8px 10px rgba(0,0,0,.3))" }));
+  else box.append(h("span", { class: "glyph", "aria-hidden": "true" }, cat.icon || glyph));
   return box;
 }
 function catName(id) { return (state.cats.find((c) => c.id === id) || {}).name || "Без категории"; }
@@ -117,7 +127,7 @@ function card(p) {
 
 // ---------- Страницы ----------
 async function pageHome() {
-  document.title = "ChapaShop — магазин Adopt Me за Telegram Stars";
+  document.title = "ChapaShop — Adopt Me, MM2 и аккаунты Roblox за Telegram Stars";
   const grid = h("section", { class: "grid", id: "grid" }, ...Array.from({ length: 6 }, () => h("div", { class: "skel" })));
   const count = h("div", { class: "count" });
   const sort = h("select", { "aria-label": "Сортировка", onchange: (e) => { state.sort = e.target.value; loadProducts(); } },
@@ -139,8 +149,8 @@ async function pageHome() {
     grid);
 
   function renderCats() {
-    const mk = (label, slug, icon) => h("button", { class: "cat" + (state.category === slug ? " on" : ""), onclick: () => { state.category = slug; renderCats(); loadProducts(); } }, h("i", { text: icon }), label);
-    cats.replaceChildren(mk("Все", null, "✨"), ...state.cats.map((c) => mk(c.name, c.slug, (CAT_STYLE[c.slug] || ["★"])[0])));
+    const mk = (label, slug, icon) => h("button", { class: "cat" + (state.category === slug ? " on" : ""), onclick: () => { state.category = slug; renderCats(); loadProducts(); } }, h("i", {}, icon), label);
+    cats.replaceChildren(mk("Все", null, "✨"), ...state.cats.map((c) => mk(c.name, c.slug, iconNode(c.icon, (CAT_STYLE[c.slug] || ["★"])[0]))));
   }
   async function loadProducts() {
     const p = new URLSearchParams({ sort: state.sort });
