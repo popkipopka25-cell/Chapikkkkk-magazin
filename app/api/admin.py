@@ -7,13 +7,14 @@ from collections import defaultdict, deque
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import Response as RawResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.db import get_db
 from app import promo as promo_mod
 from app import stock as stock_mod
+from app.slug import slugify
 from app.models import (ORDER_STATUS_RU, Admin, AuditLog, Category, Order, OrderItem,
                         OrderStatus, OrderStatusHistory, Payment, Product, ProductImage, PromoCode, PromoRequest, Setting, User)
 from app.security import (COOKIE, SESSION_TTL, check_session, csrf_for, hash_password,
@@ -447,17 +448,93 @@ def _drop_orphan_image(db: Session, url: str | None) -> None:
     iid = url[len("/media/"):]
     if not iid.isdigit():
         return
-    still = db.scalar(select(func.count()).select_from(Product).where(Product.image_url == url))
+    still = (db.scalar(select(func.count()).select_from(Product).where(Product.image_url == url))
+             + db.scalar(select(func.count()).select_from(Category).where(Category.icon == url)))
     if not still:
         img = db.get(ProductImage, int(iid))
         if img is not None:
             db.delete(img)
 
 
+# ---------- Категории (игры и разделы магазина) ----------
+class CategoryIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    icon: str | None = Field(None, max_length=512)       # эмодзи или адрес картинки
+    sort_order: int = Field(0, ge=-1000, le=1000)         # чем меньше число, тем левее категория
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Введите название категории")
+        return v
+
+    @field_validator("icon")
+    @classmethod
+    def clean_icon(cls, v):
+        v = (v or "").strip()
+        if not v:
+            return None
+        if v.startswith(("https://", "/static/", "/media/")):
+            return v
+        if len(v) <= 8 and not any(ch in v for ch in "<>\"'&"):     # короткий текст или эмодзи
+            return v
+        raise ValueError("Иконка: эмодзи или картинка (https://…)")
+
+
+def _cat_dict(c: Category) -> dict:
+    return {"id": c.id, "name": c.name, "slug": c.slug, "icon": c.icon, "sort_order": c.sort_order}
+
+
+@router.post("/categories")
+def create_category(body: CategoryIn, admin: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    base = slugify(body.name)
+    slug, n = base, 2
+    while db.scalar(select(Category.id).where(Category.slug == slug)):
+        slug, n = f"{base}_{n}", n + 1
+    c = Category(slug=slug, name=body.name, icon=body.icon, sort_order=body.sort_order)
+    db.add(c)
+    db.flush()
+    audit(db, admin.username, "category_create", "category", c.id, {"name": c.name})
+    db.commit()
+    return _cat_dict(c)
+
+
+@router.put("/categories/{cid}")
+def update_category(cid: int, body: CategoryIn, admin: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    c = db.get(Category, cid)
+    if c is None:
+        raise HTTPException(404, "Категория не найдена")
+    old_icon = c.icon
+    c.name, c.icon, c.sort_order = body.name, body.icon, body.sort_order      # адрес (slug) не меняем — ссылки остаются рабочими
+    if old_icon != c.icon:
+        db.flush()
+        _drop_orphan_image(db, old_icon)
+    audit(db, admin.username, "category_update", "category", c.id, {"name": c.name})
+    db.commit()
+    return _cat_dict(c)
+
+
+@router.delete("/categories/{cid}")
+def delete_category(cid: int, admin: Admin = Depends(current_admin), db: Session = Depends(get_db)):
+    c = db.get(Category, cid)
+    if c is None:
+        raise HTTPException(404, "Категория не найдена")
+    moved = db.execute(update(Product).where(Product.category_id == c.id).values(category_id=None)).rowcount
+    icon = c.icon
+    audit(db, admin.username, "category_delete", "category", c.id, {"name": c.name, "products_moved": moved})
+    db.delete(c)
+    db.flush()
+    _drop_orphan_image(db, icon)
+    db.commit()
+    return {"ok": True, "products_without_category": moved}
+
+
 @router.get("/products")
 def admin_products(_: Admin = Depends(current_admin), db: Session = Depends(get_db)):
     return {"products": [product_dict(p) for p in db.scalars(select(Product).order_by(Product.id.desc()))],
-            "categories": [{"id": c.id, "name": c.name, "slug": c.slug} for c in db.scalars(select(Category).order_by(Category.sort_order))]}
+            "categories": [_cat_dict(c) for c in db.scalars(select(Category).order_by(Category.sort_order, Category.id))]}
 
 
 def _check_cat(db: Session, cid):
