@@ -166,10 +166,11 @@ async function pageProduct(id) {
     return view.replaceChildren(h("div", { class: "empty" }, "Товар не найден", h("br"), h("a", { class: "btn btn-ghost", href: "/", "data-link": true }, "В каталог")));
   }
   document.title = `${p.name} — ChapaShop`;
-  let q = Math.max(1, cart.qty(p.id) || 1);
+  const maxQ = p.stock != null ? Math.max(1, Math.min(99, p.stock)) : 99;   // нельзя взять больше, чем есть на складе
+  let q = Math.min(maxQ, Math.max(1, cart.qty(p.id) || 1));
   const qn = h("span", { text: q });
   const minus = h("button", { "aria-label": "Меньше", onclick: () => { q = Math.max(1, q - 1); qn.textContent = q; } }, "−");
-  const plus = h("button", { "aria-label": "Больше", onclick: () => { q = Math.min(99, q + 1); qn.textContent = q; } }, "+");
+  const plus = h("button", { "aria-label": "Больше", onclick: () => { q = Math.min(maxQ, q + 1); qn.textContent = q; } }, "+");
   const img = productImage(p);
   if (p.is_demo) img.append(h("span", { class: "pill", text: "Демо" }));
   const sp2 = salePill(p); if (sp2) img.append(sp2);
@@ -179,7 +180,7 @@ async function pageProduct(id) {
       h("div", {},
         h("h1", { text: p.name }),
         priceNode(p),
-        h("span", { class: "status " + (p.is_available ? "ok" : "no"), text: p.is_available ? "В наличии" : "Нет в наличии" }),
+        h("span", { class: "status " + (p.is_available ? "ok" : "no"), text: p.is_available ? (p.stock != null ? `В наличии: ${p.stock} шт.` : "В наличии") : "Нет в наличии" }),
         h("p", { class: "desc", text: p.description || "Описание появится позже." }),
         h("div", { class: "facts" },
           h("div", {}, h("span", { text: "Категория" }), h("b", { text: catName(p.category_id) })),
@@ -210,9 +211,9 @@ async function pageCart() {
       productImage({ category_id: l.category_id, image_url: l.image_url, name: l.name }),
       h("div", {},
         h("a", { class: "nm", href: `/product/${l.product_id}`, "data-link": true, text: l.name }),
-        h("div", { class: "tag", text: l.available ? `${stars(l.price_stars)} за шт.${l.old_price_stars ? ` (было ${l.old_price_stars})` : ""}` : "Нет в наличии — не войдёт в заказ" }),
+        h("div", { class: "tag", text: l.available ? `${stars(l.price_stars)} за шт.${l.old_price_stars ? ` (было ${l.old_price_stars})` : ""}${l.stock != null ? ` · осталось ${l.stock}` : ""}` : "Нет в наличии — не войдёт в заказ" }),
         h("div", { class: "row" },
-          h("div", { class: "qty" }, h("button", { disabled: l.quantity <= 1, onclick: () => step(-1), "aria-label": "Меньше" }, "−"), h("span", { text: l.quantity }), h("button", { onclick: () => step(1), "aria-label": "Больше" }, "+")),
+          h("div", { class: "qty" }, h("button", { disabled: l.quantity <= 1, onclick: () => step(-1), "aria-label": "Меньше" }, "−"), h("span", { text: l.quantity }), h("button", { disabled: l.stock != null && l.quantity >= l.stock, onclick: () => step(1), "aria-label": "Больше" }, "+")),
           h("b", { text: stars(l.subtotal) })),
         h("button", { class: "rm", onclick: () => { cart.set(l.product_id, 0); pageCart(); } }, "Удалить")));
   });
