@@ -17,9 +17,17 @@ def _shop_button(label: str = "🛍 Открыть ChapaShop") -> dict:
     return {"text": label, "url": site_url()}
 
 
+def _promo_button(label: str = "🎟 Сделать свой промокод") -> dict:
+    url = get_settings().public_url.rstrip("/") + "/promo"
+    if url.startswith("https://"):
+        return {"text": label, "web_app": {"url": url}}
+    return {"text": label, "url": url}
+
+
 def main_menu(open_label: str | None = None) -> dict:
     return {"inline_keyboard": [
         [_shop_button(open_label or "🛍 Открыть ChapaShop")],
+        [_promo_button()],
         [{"text": "📦 Мои заказы", "callback_data": "orders"}, {"text": "👤 Профиль", "callback_data": "profile"}],
         [{"text": "❓ Помощь", "callback_data": "help"}],
     ]}
