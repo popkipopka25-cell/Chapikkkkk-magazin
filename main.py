@@ -97,8 +97,9 @@ MAX_BODY_RESTORE = 50 * 1024 * 1024   # восстановление копии 
 @app.exception_handler(Exception)
 async def unhandled(request: Request, exc: Exception):
     # В лог — только тип ошибки и адрес, без тела запроса и секретов.
-    log.error("Ошибка %s на %s %s", type(exc).__name__, request.method, request.url.path)
-    return JSONResponse({"detail": "Внутренняя ошибка сервера. Попробуйте позже."}, status_code=500)
+    log.error("Ошибка %s на %s %s", type(exc).__name__, request.method, request.url.path, exc_info=exc)
+    return JSONResponse({"detail": "Внутренняя ошибка сервера. Попробуйте позже."}, status_code=500,
+                        media_type="application/json; charset=utf-8")
 
 
 @app.exception_handler(RequestValidationError)
