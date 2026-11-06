@@ -101,6 +101,7 @@ class Category(Base):
     slug: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(128))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    icon: Mapped[str | None] = mapped_column(String(512))     # эмодзи, /static/..., /media/... или https://-ссылка
     products: Mapped[list["Product"]] = relationship(back_populates="category")
 
 
