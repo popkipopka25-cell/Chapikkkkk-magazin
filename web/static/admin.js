@@ -17,7 +17,7 @@ let navSeq = 0;           // номер текущего перехода — ч
 const STATUS = {awaiting_payment:"Ожидает оплаты", paid:"Оплачен", processing:"В обработке", awaiting_delivery:"Ожидает выдачи", delivered:"Выдан", rejected:"Отклонён", refunded:"Возврат оформлен"};
 const NEXT = {awaiting_payment:["rejected"], paid:["processing","awaiting_delivery","delivered","rejected"], processing:["awaiting_delivery","delivered","rejected"], awaiting_delivery:["processing","delivered","rejected"]};
 const PAY = {pending:"Ожидает оплаты", paid:"Оплачен", refunded:"Возврат оформлен", failed:"Ошибка оплаты"};
-const ACTIONS = {login:"Вход", login_failed:"Неудачный вход", logout:"Выход", password_changed:"Смена пароля", order_status:"Статус заказа", order_server_link:"Ссылка на сервер", order_refund:"Возврат", product_create:"Новый товар", product_update:"Изменение товара", product_delete:"Удаление товара", settings_update:"Настройки", order_deliver:"Начата выдача", order_receipt_sent:"Отправлен чек", backup_create:"Резервная копия", backup_restore:"Восстановление из копии", promo_create:"Новый промокод", promo_update:"Изменение промокода", promo_delete:"Удаление промокода", user_block:"Блокировка покупателя", user_unblock:"Разблокировка покупателя", image_upload:"Загружено фото", demo_products_create:"Добавлены тестовые товары", demo_products_delete:"Удалены тестовые товары", promo_request_approve:"Заявка на промокод одобрена", promo_request_reject:"Заявка на промокод отклонена"};
+const ACTIONS = {login:"Вход", login_failed:"Неудачный вход", logout:"Выход", password_changed:"Смена пароля", order_status:"Статус заказа", order_server_link:"Ссылка на сервер", order_refund:"Возврат", product_create:"Новый товар", product_update:"Изменение товара", product_delete:"Удаление товара", settings_update:"Настройки", order_deliver:"Начата выдача", order_receipt_sent:"Отправлен чек", backup_create:"Резервная копия", backup_restore:"Восстановление из копии", promo_create:"Новый промокод", promo_update:"Изменение промокода", promo_delete:"Удаление промокода", user_block:"Блокировка покупателя", user_unblock:"Разблокировка покупателя", image_upload:"Загружено фото", demo_products_create:"Добавлены тестовые товары", demo_products_delete:"Удалены тестовые товары", promo_request_approve:"Заявка на промокод одобрена", promo_request_reject:"Заявка на промокод отклонена", category_create:"Новая категория", category_update:"Изменение категории", category_delete:"Удаление категории"};
 const SETTING_RU = {shop_name:"Название магазина", shop_description:"Описание", primary_color:"Основной цвет", maintenance_mode:"Режим обслуживания (0/1)", contact_info:"Контакты", order_rules:"Правила заказа", bot_username:"Username бота (без @)", vip_server_link:"Ссылка на VIP-сервер Roblox (покупатель увидит её после оплаты)"};
 const GLYPH = {pets:"🐾", eggs:"🥚", potions:"🧪", other:"🎁"};
 
@@ -340,9 +340,12 @@ async function prepareImage(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
+const catGlyph = (c) => {   // иконка категории для товара без фото: картинка или эмодзи
+  c = c || {};
+  return /^(\/|https:\/\/)/.test(c.icon || "") ? `<img src="${esc(c.icon)}" alt="" style="width:58%;height:58%;object-fit:contain">` : `<span>${esc(c.icon || GLYPH[c.slug] || "★")}</span>`;
+};
 function thumb(p, cats) {
-  const slug = (cats.find((c) => c.id === p.category_id) || {}).slug;
-  return p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy">` : `<span>${GLYPH[slug] || "★"}</span>`;
+  return p.image_url ? `<img src="${esc(p.image_url)}" alt="" loading="lazy">` : catGlyph(cats.find((c) => c.id === p.category_id));
 }
 
 async function products() {
@@ -354,6 +357,10 @@ async function products() {
   view.innerHTML = `<div class="page-head"><h2>Товары</h2><button class="btn" id="padd">+ Добавить товар</button></div>
     <div class="bar"><input id="pq" type="search" placeholder="Поиск товара"></div>
     <div id="plist" class="pgrid"></div>
+    <div class="card" style="margin-top:18px"><h3>Категории</h3>
+      <p class="muted small">Игры и разделы магазина (Adopt Me, Murder Mystery 2, Аккаунты…). Покупатель выбирает их над списком товаров. Добавляйте свои.</p>
+      <div id="catlist" class="list" style="margin:10px 0"></div>
+      <div class="actions"><button class="btn" id="cadd">+ Добавить категорию</button></div></div>
     <div class="card demo-box" style="margin-top:18px"><h3>Тестовые товары</h3>
       <p class="muted small">Фейковые товары с пометкой «Демо» — чтобы проверить магазин, корзину и бота. Один из них со скидкой, один «нет в наличии». Реальные товары не затрагиваются.</p>
       <div class="actions"><button class="btn ghost" id="demoAdd">+ Добавить тестовые товары</button>
@@ -373,6 +380,54 @@ async function products() {
   };
   $("#pq").oninput = draw; draw();
   $("#padd").onclick = () => form();
+  const isUrl = (s) => /^(\/|https:\/\/)/.test(s || "");
+  const iconHtml = (s) => isUrl(s) ? `<img src="${esc(s)}" alt="" style="width:30px;height:30px;object-fit:contain;vertical-align:middle;margin-right:8px">` : `<span style="font-size:22px;margin-right:8px">${esc(s || "★")}</span>`;
+  const drawCats = () => {
+    $("#catlist").innerHTML = cats.map((c) => `<div class="card row" data-cat="${c.id}" style="cursor:pointer"><div class="mid">${iconHtml(c.icon)}<b>${esc(c.name)}</b>
+      <div class="muted small">Товаров: ${list.filter((p) => p.category_id === c.id).length}</div></div><div class="end"><span class="btn ghost sm">Изменить</span></div></div>`).join("")
+      || '<div class="card empty">Категорий нет. Нажмите «+ Добавить категорию».</div>';
+    $$("[data-cat]", $("#catlist")).forEach((el) => el.onclick = () => catForm(cats.find((c) => c.id == el.dataset.cat)));
+  };
+  function catForm(c) {
+    const isNew = !c;
+    c = c || {name:"", icon:"", sort_order: 0};
+    let blob = null;
+    const sheet = openModal(`<h3>${isNew ? "Новая категория" : "Редактирование категории"}</h3>
+      <label class="fld">Название<input id="cn" maxlength="64" value="${esc(c.name)}" placeholder="Например, Adopt Me"></label>
+      <div class="fld">Иконка (эмодзи или картинка)</div>
+      <div class="photo"><div class="pimg" id="cprev"></div>
+        <div class="btns"><label class="btn" for="cfile" role="button" tabindex="0">Выбрать картинку</label><button class="btn out sm" id="cclr" type="button">Убрать</button></div></div>
+      <input type="file" id="cfile" accept="image/*" class="vh">
+      <label class="fld">Или эмодзи / ссылка на картинку<input id="ci" maxlength="512" value="${esc(c.icon || "")}" placeholder="🐾 или https://…"></label>
+      <label class="fld">Порядок (меньше — левее)<input id="co" type="number" inputmode="numeric" min="-1000" max="1000" value="${c.sort_order ?? 0}"></label>
+      <div class="actions"><button class="btn out" id="cx" type="button">Отмена</button><button class="btn" id="cs" type="button">Сохранить</button></div>
+      ${isNew ? "" : '<div class="actions" style="margin-top:8px"><button class="btn danger sm" id="cdl" type="button" style="flex:none">Удалить категорию</button></div>'}`);
+    const prev = () => { const v = blob ? URL.createObjectURL(blob) : $("#ci", sheet).value.trim(); $("#cprev", sheet).innerHTML = isUrl(v) ? `<img src="${esc(v)}" alt="">` : `<span>${esc(v || "★")}</span>`; };
+    $("#ci", sheet).oninput = () => { blob = null; prev(); };
+    $("#cclr", sheet).onclick = () => { blob = null; $("#ci", sheet).value = ""; prev(); };
+    $("#cx", sheet).onclick = closeModal;
+    $("#cfile", sheet).onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try { blob = await prepareImage(f); $("#ci", sheet).value = ""; prev(); toast("Картинка выбрана"); } catch (x) { toast(x.message, true); }
+      e.target.value = "";
+    };
+    bind($("#cs", sheet), async () => {
+      const name = $("#cn", sheet).value.trim();
+      if (!name) throw new Error("Введите название категории");
+      let icon = $("#ci", sheet).value.trim();
+      if (blob) { toast("Загружаю картинку…"); icon = (await api("/upload-image", {method:"POST", body: blob, type: blob.type || "application/octet-stream"})).image_url; }
+      await api(isNew ? "/categories" : "/categories/" + c.id, {method: isNew ? "POST" : "PUT", body: {name, icon: icon || null, sort_order: parseInt($("#co", sheet).value, 10) || 0}});
+      closeModal(); toast("Категория сохранена"); await products();
+    });
+    if (!isNew) bind($("#cdl", sheet), async () => {
+      const n = list.filter((p) => p.category_id === c.id).length;
+      if (!(await ask({title: "Удалить категорию?", text: n ? `Товары (${n} шт.) останутся в магазине, но без категории.` : "Категория пустая.", ok: "Удалить", danger: true}))) return;
+      await api("/categories/" + c.id, {method:"DELETE"}); toast("Категория удалена"); await products();
+    });
+    prev();
+  }
+  $("#cadd").onclick = () => catForm();
+  drawCats();
   bind($("#demoAdd"), async () => { const r = await api("/demo-products", {method:"POST"}); toast(r.created ? `Добавлено тестовых товаров: ${r.created}` : "Тестовые товары уже добавлены"); await products(); });
   bind($("#demoDel"), async () => {
     if (!(await ask({title: "Удалить тестовые товары?", text: "Удалятся только товары с пометкой «Демо». Старые заказы сохранятся.", ok: "Удалить", danger: true}))) return;
@@ -405,9 +460,9 @@ async function products() {
       <div class="actions"><button class="btn out" id="fx2" type="button">Отмена</button><button class="btn" id="fs" type="button">Сохранить</button></div>
       ${isNew ? "" : '<div class="actions" style="margin-top:8px"><button class="btn danger sm" id="fdl" type="button" style="flex:none">Удалить товар</button></div>'}`);
 
-    const slugOf = () => (cats.find((c) => String(c.id) === $("#fc", sheet).value) || {}).slug;
+    const catOfForm = () => cats.find((c) => String(c.id) === $("#fc", sheet).value);
     const drawPreview = () => {
-      $("#fprev", sheet).innerHTML = preview ? `<img src="${esc(preview)}" alt="">` : `<span>${GLYPH[slugOf()] || "★"}</span>`;
+      $("#fprev", sheet).innerHTML = preview ? `<img src="${esc(preview)}" alt="">` : catGlyph(catOfForm());
     };
     const calc = () => {
       const base = Math.max(0, parseInt($("#fp", sheet).value, 10) || 0);
