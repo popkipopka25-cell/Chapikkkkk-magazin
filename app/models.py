@@ -137,6 +137,13 @@ class Order(Base):
 
     @property
     def number(self) -> str:
+        # Генерируем красивый уникальный номер на основе ID: буква + 4 цифры
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+        char = alphabet[self.id % 24]
+        num = (self.id * 7391) % 10000
+        return f"{char}-{num:04d}"
+    @property
+    def number(self) -> str:
         return f"{self.id:05d}"
 
 
