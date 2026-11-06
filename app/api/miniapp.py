@@ -4,18 +4,19 @@ import hmac
 import re
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import Response as RawResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
 from app import promo as promo_mod
-from app.models import (ORDER_STATUS_RU, Order, OrderItem, OrderStatus, OrderStatusHistory, Payment, Product,
-                        PromoCode, Setting, User)
+from app.models import (ORDER_STATUS_RU, Order, OrderItem, OrderStatus, OrderStatusHistory, Payment, PaymentStatus,
+                        Product, PromoCode, Setting, User)
 from app.tg_auth import InitDataError, verify_init_data
 
 router = APIRouter(prefix="/api", tags=["miniapp"])
@@ -33,6 +34,19 @@ def _rate_limit(tg_id: int, limit: int = 5, window: int = 60):
     if len(q) >= limit:
         raise HTTPException(429, "Слишком много заказов, подождите минуту")
     q.append(t)
+
+
+FREE_LIMIT, FREE_WINDOW_HOURS = 3, 24
+
+
+def _free_limit(db: Session, user: User) -> None:
+    """Защита от накрутки: не больше 3 бесплатных заказов в сутки на человека."""
+    since = datetime.now(timezone.utc) - timedelta(hours=FREE_WINDOW_HOURS)
+    n = db.scalar(select(func.count()).select_from(Order).where(
+        Order.user_id == user.id, Order.total_stars == 0, Order.created_at > since,
+        Order.status != OrderStatus.rejected)) or 0
+    if n >= FREE_LIMIT:
+        raise HTTPException(429, "Бесплатные товары: не больше 3 заказов в сутки")
 
 
 def current_user(db: Session = Depends(get_db),
@@ -138,7 +152,11 @@ def create_order(body: OrderIn, user: User = Depends(current_user), db: Session 
         items.append(OrderItem(product_id=p.id, product_name=p.name, price_stars=p.price_stars, quantity=qty))
         total += p.price_stars * qty
     discount, promo_text = 0, None
+    if total == 0:
+        _free_limit(db, user)
     if body.promo_code and body.promo_code.strip():
+        if total == 0:
+            raise HTTPException(409, "Товар бесплатный — промокод не нужен")
         promo, err = promo_mod.find_valid(db, body.promo_code, user.id)
         if promo is None:
             raise HTTPException(409, err or "Промокод не найден")
@@ -151,10 +169,13 @@ def create_order(body: OrderIn, user: User = Depends(current_user), db: Session 
         if got.rowcount != 1:
             db.rollback()
             raise HTTPException(409, "Лимит использований промокода исчерпан")
+    free = total - discount <= 0           # бесплатный заказ: платить нечего, сразу «Оплачен» и ждёт выдачи
+    first = OrderStatus.paid if free else OrderStatus.awaiting_payment
     o = Order(user_id=user.id, telegram_id=user.telegram_id, roblox_username=nick, total_stars=total - discount,
               promo_code=promo_text, discount_stars=discount,
-              items=items, history=[OrderStatusHistory(old_status=None, new_status=OrderStatus.awaiting_payment.value,
-                                                        changed_by="customer")])
+              payment_status=PaymentStatus.paid if free else PaymentStatus.pending, status=first,
+              items=items, history=[OrderStatusHistory(old_status=None, new_status=first.value, changed_by="customer",
+                                                        comment="Бесплатный товар" if free else None)])
     user.roblox_username = nick
     db.add(o)
     db.commit()   # номер заказа = автоинкремент БД, конфликтов при одновременном создании нет
